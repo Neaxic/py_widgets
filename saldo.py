@@ -32,6 +32,16 @@ sekunder_gået = (nu - startafåret).total_seconds()
 #Beregn startværdi
 beløb = sekunder_gået * udbytte_pr_sekund
 
+# Privacy/censoring functionality
+censored = False
+
+def toggle_censoring(event):
+    """Toggle between showing and censoring the dividend amount."""
+    global censored
+    censored = not censored
+    # Update display immediately
+    update_display_text()
+
 #GUI
 root = tk.Tk()
 root.title("Udbytte i år (live)")
@@ -61,11 +71,24 @@ frame.pack(expand=True, fill="both")
 label = tk.Label(frame, text="", bg=baggrundsfarve, fg=tekstfarve, font=("Consolas", 12))
 label.pack(padx=10, pady=20)
 
+def update_display_text():
+    """Update the display text, considering censoring state."""
+    if censored:
+        display_text = "Udbytte i år: ******* kr"
+    else:
+        display_text = f"Udbytte i år: {beløb:.6f} kr"
+    label.config(text=display_text)
+
 def opdater():
     global beløb
     beløb += udbytte_pr_sekund
-    label.config(text=f"Udbytte i år: {beløb:.6f} kr")
+    update_display_text()
     root.after(1000, opdater)
+
+# Bind Ctrl+E to toggle censoring
+root.bind('<Control-e>', toggle_censoring)
+frame.bind('<Control-e>', toggle_censoring)
+label.bind('<Control-e>', toggle_censoring)
 
 opdater()
 root.mainloop()
