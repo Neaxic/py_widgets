@@ -7,6 +7,48 @@ from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtCore import Qt, QTimer, QPoint
 from PyQt5.QtGui import QCursor
 import time
+import os
+import json
+
+class WidgetPositionManager:
+    """Simple position persistence manager using JSON file."""
+    
+    def __init__(self):
+        self.config_file = os.path.join(os.path.dirname(__file__), 'widget_positions.json')
+        self.positions = self.load_positions()
+    
+    def load_positions(self):
+        """Load widget positions from file."""
+        try:
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r') as f:
+                    return json.load(f)
+        except Exception as e:
+            print(f"Warning: Could not load positions: {e}")
+        return {}
+    
+    def save_positions(self):
+        """Save widget positions to file."""
+        try:
+            with open(self.config_file, 'w') as f:
+                json.dump(self.positions, f, indent=2)
+        except Exception as e:
+            print(f"Warning: Could not save positions: {e}")
+    
+    def get_position(self, widget_name, default_x=50, default_y=50):
+        """Get saved position for a widget."""
+        if widget_name in self.positions:
+            pos = self.positions[widget_name]
+            return QPoint(pos['x'], pos['y'])
+        return QPoint(default_x, default_y)
+    
+    def set_position(self, widget_name, x, y):
+        """Set position for a widget and save immediately."""
+        self.positions[widget_name] = {'x': x, 'y': y}
+        self.save_positions()
+
+# Global position manager instance
+position_manager = WidgetPositionManager()
 
 # Basic HTML template styled like iOS battery widget
 html_template = """
@@ -105,10 +147,11 @@ watchlist_template = """
     width: 128px;
     height: 128px;
     background: rgba(0, 0, 0, 0.5);
-    border: 1px solid rgba(31, 41, 55, 0.3);
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.6);
     border: {border_style};
     cursor: {cursor_style};
+    overflow: hidden;
+    backdrop-filter: blur(12px);
   }}
   .header {{
     display: flex;
@@ -131,6 +174,8 @@ watchlist_template = """
     gap: 6px;
     flex: 1;
     justify-content: space-evenly;
+    overflow: hidden;
+    border-radius: 12px;
   }}
   .watchlist-row {{
     display: flex;
@@ -233,6 +278,7 @@ class DragOverlay(QWidget):
             if (modifiers & Qt.ControlModifier) or self.main_widget.is_move_mode:
                 print("Starting drag from overlay")
                 self.is_dragging = True
+                self.main_widget.is_dragging = True  # Update parent's state
                 self.drag_position = event.pos()
                 self.setCursor(Qt.ClosedHandCursor)
                 self.main_widget.setCursor(Qt.ClosedHandCursor)
@@ -259,12 +305,17 @@ class DragOverlay(QWidget):
         if event.button() == Qt.LeftButton and self.is_dragging:
             print("Ending drag from overlay")
             self.is_dragging = False
+            self.main_widget.is_dragging = False  # Update parent's state
             if not self.main_widget.is_move_mode:
                 self.setCursor(Qt.ArrowCursor)
                 self.main_widget.setCursor(Qt.ArrowCursor)
             else:
                 self.setCursor(Qt.OpenHandCursor)
                 self.main_widget.setCursor(Qt.OpenHandCursor)
+            
+            # Save position after drag ends
+            if hasattr(self.main_widget, 'save_position'):
+                QTimer.singleShot(50, self.main_widget.save_position)
                 
     def enterEvent(self, event):
         """Show help when hovering."""
@@ -284,6 +335,8 @@ class WatchlistWidget(QMainWindow):
         self.snap_margin = 30
         self.hwnd = None
         self.help_visible = True
+        self.widget_name = "watchlist"  # Unique identifier for position saving
+        self.is_initializing = True  # Flag to prevent saving during startup
         
         # Mock stock data - replace with real API calls
         self.stocks = {
@@ -299,8 +352,33 @@ class WatchlistWidget(QMainWindow):
         self.setup_timer()
         self.setup_desktop_level()
         
+        # Load and apply saved position
+        self.load_position()
+        
+        # Initialization complete - now we can save positions
+        self.is_initializing = False
+        
         # Show help initially, then fade after 3 seconds
         QTimer.singleShot(3000, self.fade_help)
+        
+    def load_position(self):
+        """Load and apply saved widget position."""
+        saved_pos = position_manager.get_position(self.widget_name, 320, 50)
+        self.move(saved_pos)
+        print(f"Loaded {self.widget_name} widget position: {saved_pos.x()}, {saved_pos.y()}")
+        
+    def save_position(self):
+        """Save current widget position."""
+        pos = self.pos()
+        position_manager.set_position(self.widget_name, pos.x(), pos.y())
+        print(f"Saved {self.widget_name} widget position: {pos.x()}, {pos.y()}")
+        
+    def moveEvent(self, event):
+        """Handle move events to save position."""
+        super().moveEvent(event)
+        # Only save if we're not currently dragging and not initializing
+        if not self.is_dragging and not self.is_initializing:
+            QTimer.singleShot(100, self.save_position)  # Small delay to avoid spam
         
     def setup_window(self):
         """Configure the main window properties."""
@@ -309,6 +387,7 @@ class WatchlistWidget(QMainWindow):
             Qt.Tool
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
         self.setFixedSize(160, 160)  # Small widget size
         
     def setup_web_view(self):
@@ -317,6 +396,11 @@ class WatchlistWidget(QMainWindow):
         self.view.setStyleSheet("background: transparent;")
         self.view.setAttribute(Qt.WA_TranslucentBackground)
         self.view.page().setBackgroundColor(Qt.transparent)
+        
+        # Additional settings for better transparency
+        self.view.setAttribute(Qt.WA_OpaquePaintEvent, False)
+        self.view.setAttribute(Qt.WA_NoSystemBackground, True)
+        
         self.view.setGeometry(self.rect())
         self.update_html()
         
@@ -495,6 +579,8 @@ class DesktopWebWidget(QMainWindow):
         self.snap_margin = 30
         self.hwnd = None
         self.help_visible = True
+        self.widget_name = "cpu"  # Unique identifier for position saving
+        self.is_initializing = True  # Flag to prevent saving during startup
         
         self.setup_window()
         self.setup_web_view()
@@ -502,8 +588,33 @@ class DesktopWebWidget(QMainWindow):
         self.setup_timer()
         self.setup_desktop_level()
         
+        # Load and apply saved position
+        self.load_position()
+        
+        # Initialization complete - now we can save positions
+        self.is_initializing = False
+        
         # Show help initially, then fade after 3 seconds
         QTimer.singleShot(3000, self.fade_help)
+        
+    def load_position(self):
+        """Load and apply saved widget position."""
+        saved_pos = position_manager.get_position(self.widget_name, 50, 50)
+        self.move(saved_pos)
+        print(f"Loaded {self.widget_name} widget position: {saved_pos.x()}, {saved_pos.y()}")
+        
+    def save_position(self):
+        """Save current widget position."""
+        pos = self.pos()
+        position_manager.set_position(self.widget_name, pos.x(), pos.y())
+        print(f"Saved {self.widget_name} widget position: {pos.x()}, {pos.y()}")
+        
+    def moveEvent(self, event):
+        """Handle move events to save position."""
+        super().moveEvent(event)
+        # Only save if we're not currently dragging and not initializing
+        if not self.is_dragging and not self.is_initializing:
+            QTimer.singleShot(100, self.save_position)  # Small delay to avoid spam
         
     def setup_window(self):
         """Configure the main window properties."""
@@ -702,13 +813,11 @@ def main():
     if widget_type == "watchlist":
         # Create watchlist widget
         w = WatchlistWidget()
-        w.move(320, 50)  # Position it differently from CPU widget
         print("Watchlist Widget loaded!")
-        print("Shows: TSLA, NVDA, MSFT prices")
+        print("Shows: TSLA, NVDA, MSFT, AAPL prices")
     else:
         # Create CPU widget (default)
         w = DesktopWebWidget()
-        w.move(50, 50)
         print("CPU Widget loaded!")
     
     w.show()
@@ -719,6 +828,7 @@ def main():
     print("- Double-click: Toggle move mode (easier dragging)")
     print("- Hover: Show controls")
     print("- ESC: Exit move mode")
+    print("- Position is automatically saved and restored!")
     print()
     print("Usage:")
     print("- python web.py          (CPU widget)")
@@ -732,13 +842,11 @@ def run_both():
     
     # Create CPU widget
     cpu_widget = DesktopWebWidget()
-    cpu_widget.move(50, 50)
     cpu_widget.set_transparency(0.9)
     cpu_widget.show()
     
     # Create Watchlist widget
     watchlist_widget = WatchlistWidget()
-    watchlist_widget.move(320, 50)
     watchlist_widget.set_transparency(0.9)
     watchlist_widget.show()
     
@@ -746,6 +854,7 @@ def run_both():
     print("- CPU Widget (left)")
     print("- Watchlist Widget (right)")
     print("Controls work on both widgets")
+    print("Positions are automatically saved and restored")
     
     sys.exit(app.exec_())
 
