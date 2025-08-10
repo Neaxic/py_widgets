@@ -17,12 +17,12 @@ html_template = """
     margin: 0;
     padding: 0;
     overflow: hidden;
-    background: transparent;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     color: #f0f0f0;
     user-select: none;
     -webkit-user-select: none;
     pointer-events: none;  /* Make HTML non-interactive for dragging */
+    background: transparent;
   }}
   .container {{
     background: rgba(20, 20, 20, 0.85);
@@ -195,6 +195,7 @@ class DesktopWebWidget(QMainWindow):
         self.view = QWebEngineView(self)
         self.view.setStyleSheet("background: transparent;")
         self.view.setAttribute(Qt.WA_TranslucentBackground)
+        self.view.page().setBackgroundColor(Qt.transparent)
         self.view.setGeometry(self.rect())
         self.update_html()
         
